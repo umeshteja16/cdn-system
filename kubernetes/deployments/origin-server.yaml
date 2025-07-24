@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: origin-server
+  namespace: cdn-system
+  labels:
+    app: origin-server
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: origin-server
+  template:
+    metadata:
+      labels:
+        app: origin-server
+    spec:
+      containers:
+      - name: origin-server
+        image: cdn-origin-server:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: PORT
+          value: "3000"
+        - name: DB_URL
+          valueFrom:
+            secretKeyRef:
+              name: cdn-secrets
+              key: database-url
+        - name: REDIS_URL
+          valueFrom:
+            configMapKeyRef:
+              name: cdn-config
+              key: REDIS_URL
+        - name: NODE_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: cdn-config
+              key: NODE_ENV
+        volumeMounts:
+        - name: uploads-storage
+          mountPath: /app/uploads
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "300m"
+          limits:
+            memory: "1Gi"
+            cpu: "600m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 60
+          periodSeconds: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 3000
+          initialDelaySeconds: 30
+          periodSeconds: 5
+      volumes:
+      - name: uploads-storage
+        persistentVolumeClaim:
+          claimName: uploads-pvc
