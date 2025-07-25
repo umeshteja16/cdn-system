@@ -3,176 +3,187 @@ version: '3.8'
 services:
   # Load Balancer / Reverse Proxy
   nginx:
-    build: ./nginx
-    container_name: cdn-nginx
+    image: nginx:alpine
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - ./nginx/nginx.conf:/etc/nginx/nginx.conf
-      - ./nginx/ssl:/etc/ssl/certs
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/cache:/var/cache/nginx
+      - ./ssl:/etc/nginx/ssl:ro
+    networks:
+      - cdn-network  # Only one entry needed
     depends_on:
+      - origin-server
       - edge-server-1
       - edge-server-2
-      - api-gateway
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Origin Server
+  origin-server:
+    build:
+      context: ./origin-server
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+    volumes:
+      - ./uploads:/app/uploads
     networks:
       - cdn-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # Edge Servers (Go)
+  # Edge Server 1 (US East)
   edge-server-1:
-    build: ./edge-server
-    container_name: cdn-edge-1
+    build:
+      context: ./edge-server
+      dockerfile: Dockerfile
+    ports:
+      - "8081:8080"
     environment:
       - EDGE_ID=edge-1
-      - REDIS_URL=redis://redis-cluster:6379
+      - REGION=us-east
       - ORIGIN_URL=http://origin-server:3000
-      - REGION=us-east-1
-    depends_on:
-      - redis-cluster
-      - origin-server
+      - REDIS_URL=redis://redis-cluster:6379
+    volumes:
+      - ./cache/edge-1:/cache
     networks:
       - cdn-network
+    depends_on:
+      - origin-server
+      - redis-cluster
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
+  # Edge Server 2 (EU West)
   edge-server-2:
-    build: ./edge-server
-    container_name: cdn-edge-2
+    build:
+      context: ./edge-server
+      dockerfile: Dockerfile
+    ports:
+      - "8082:8080"
     environment:
       - EDGE_ID=edge-2
-      - REDIS_URL=redis://redis-cluster:6379
+      - REGION=eu-west
       - ORIGIN_URL=http://origin-server:3000
-      - REGION=us-west-1
-    depends_on:
-      - redis-cluster
-      - origin-server
-    networks:
-      - cdn-network
-
-  # Origin Server (Node.js)
-  origin-server:
-    build: ./origin-server
-    container_name: cdn-origin
-    environment:
-      - NODE_ENV=development
-      - PORT=3000
-      - DB_URL=postgresql://cdn_user:cdn_password@postgres:5432/cdn_db
       - REDIS_URL=redis://redis-cluster:6379
-      - INFLUX_URL=http://influxdb:8086
     volumes:
-      - ./origin-server/uploads:/app/uploads
+      - ./cache/edge-2:/cache
+    networks:
+      - cdn-network
     depends_on:
-      - postgres
+      - origin-server
       - redis-cluster
-    networks:
-      - cdn-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # API Gateway (Node.js)
+  # API Gateway
   api-gateway:
-    build: ./api-gateway
-    container_name: cdn-api-gateway
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "4000:4000"
     environment:
-      - NODE_ENV=development
+      - NODE_ENV=production
       - PORT=4000
-      - DB_URL=postgresql://cdn_user:cdn_password@postgres:5432/cdn_db
-    depends_on:
-      - postgres
     networks:
       - cdn-network
-
-  # Analytics Service (Python)
-  analytics-service:
-    build: ./analytics-service
-    container_name: cdn-analytics
-    environment:
-      - INFLUX_URL=http://influxdb:8086
-      - INFLUX_TOKEN=your-influx-token
-      - INFLUX_ORG=cdn-org
-      - INFLUX_BUCKET=cdn-analytics
     depends_on:
-      - influxdb
+      - origin-server
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Redis for caching and coordination
+  redis-cluster:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 512mb --maxmemory-policy allkeys-lru --save 60 1000
+    volumes:
+      - redis_data:/data
     networks:
       - cdn-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # Databases
+  # PostgreSQL for metadata
   postgres:
     image: postgres:15-alpine
-    container_name: cdn-postgres
     environment:
       - POSTGRES_DB=cdn_db
       - POSTGRES_USER=cdn_user
       - POSTGRES_PASSWORD=cdn_password
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./database/postgresql/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - "5432:5432"
-    networks:
-      - cdn-network
-
-  redis-cluster:
-    image: redis:7-alpine
-    container_name: cdn-redis
-    command: redis-server --appendonly yes --replica-read-only no
     volumes:
-      - redis_data:/data
-      - ./database/redis/redis.conf:/usr/local/etc/redis/redis.conf
-    ports:
-      - "6379:6379"
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     networks:
       - cdn-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cdn_user -d cdn_db"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
-  # Time Series Database for Analytics
+  # InfluxDB for metrics
   influxdb:
     image: influxdb:2.7-alpine
-    container_name: cdn-influxdb
-    environment:
-      - INFLUXDB_DB=cdn_analytics
-      - INFLUXDB_ADMIN_USER=admin
-      - INFLUXDB_ADMIN_PASSWORD=admin123
-      - INFLUXDB_USER=cdn_user
-      - INFLUXDB_USER_PASSWORD=cdn_password
-    volumes:
-      - influxdb_data:/var/lib/influxdb2
     ports:
       - "8086:8086"
-    networks:
-      - cdn-network
-
-  # Monitoring
-  prometheus:
-    build: ./monitoring/prometheus
-    container_name: cdn-prometheus
-    ports:
-      - "9090:9090"
-    volumes:
-      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
-      - prometheus_data:/prometheus
-    networks:
-      - cdn-network
-
-  grafana:
-    build: ./monitoring/grafana
-    container_name: cdn-grafana
     environment:
-      - GF_SECURITY_ADMIN_PASSWORD=admin123
-    ports:
-      - "3001:3000"
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=adminpassword
+      - DOCKER_INFLUXDB_INIT_ORG=cdn-org
+      - DOCKER_INFLUXDB_INIT_BUCKET=cdn-metrics
     volumes:
-      - grafana_data:/var/lib/grafana
-      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
-    depends_on:
-      - prometheus
-      - influxdb
+      - influxdb_data:/var/lib/influxdb2
     networks:
       - cdn-network
-
-volumes:
-  postgres_data:
-  redis_data:
-  influxdb_data:
-  prometheus_data:
-  grafana_data:
+    restart: unless-stopped
 
 networks:
   cdn-network:
     driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  influxdb_data:
+    driver: local

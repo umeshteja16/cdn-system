@@ -76,7 +76,6 @@ echo "   - Grafana: http://localhost:3001 (admin/admin123)"
 echo "   - Prometheus: http://localhost:9090"
 echo "   - API Docs: http://localhost/api/docs"
 
----
 
 #!/bin/bash
 # scripts/deploy.sh
