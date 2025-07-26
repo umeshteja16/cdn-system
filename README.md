@@ -1,525 +1,726 @@
-# 🚀 CDN System - Content Delivery Network
+# CDN System - Complete Guide
 
-A comprehensive, production-ready Content Delivery Network built with modern technologies and best practices.
+A production-ready Content Delivery Network (CDN) implementation built with modern technologies including Node.js, Go, Python, Redis, PostgreSQL, and Nginx. This system provides distributed content caching, real-time analytics, and high-performance content delivery across multiple edge servers.
 
-## 🏗️ Architecture
+## Table of Contents
 
-### Tech Stack
+- [What is a CDN?](#what-is-a-cdn)
+- [System Architecture](#system-architecture)
+- [Features](#features)
+- [Technology Stack](#technology-stack)
+- [Prerequisites](#prerequisites)
+- [Quick Start](#quick-start)
+- [Detailed Setup](#detailed-setup)
+- [System Components](#system-components)
+- [API Documentation](#api-documentation)
+- [Performance Testing](#performance-testing)
+- [Monitoring & Analytics](#monitoring--analytics)
+- [Troubleshooting](#troubleshooting)
+- [Learning Resources](#learning-resources)
 
-**Frontend/Load Balancer:**
-- **Nginx** - High-performance reverse proxy and load balancer
+## What is a CDN?
 
-**Edge Servers:**
-- **Go** - High-performance edge servers with Redis caching
-- **Redis** - Distributed caching layer
+A **Content Delivery Network (CDN)** is a distributed system of servers that delivers web content to users based on their geographic location. The primary goals are:
 
-**Origin Server:**
-- **Node.js/Express** - Content management and API server
-- **PostgreSQL** - Metadata and analytics storage
-- **Multer** - File upload handling
+- **Reduce Latency**: Serve content from the closest server to the user
+- **Improve Performance**: Cache static assets to reduce server load
+- **Increase Availability**: Distribute content across multiple servers for redundancy
+- **Scale Globally**: Handle high traffic volumes across different regions
 
-**Analytics & Monitoring:**
-- **Python/FastAPI** - Analytics processing service
-- **InfluxDB** - Time-series data for analytics
-- **Prometheus** - Metrics collection
-- **Grafana** - Monitoring dashboards
+### Key CDN Concepts
 
-**Infrastructure:**
-- **Docker & Docker Compose** - Containerization
-- **Kubernetes** - Production orchestration
-- **SSL/TLS** - Security
+- **Origin Server**: The main server containing the original content
+- **Edge Servers**: Distributed cache servers close to end users
+- **Cache Hit/Miss**: Whether content is found in cache (hit) or needs to be fetched from origin (miss)
+- **TTL (Time To Live)**: How long content stays cached before expiring
+- **Geographic Distribution**: Placing servers in different regions worldwide
 
-### System Components
+## System Architecture
 
 ```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│   Client    │───▶│    Nginx    │───▶│ Edge Server │
-└─────────────┘    │Load Balancer│    │   (Go)      │
-                   └─────────────┘    └─────────────┘
-                          │                   │
-                          ▼                   ▼
-                   ┌─────────────┐    ┌─────────────┐
-                   │ API Gateway │    │    Redis    │
-                   │  (Node.js)  │    │   Cache     │
-                   └─────────────┘    └─────────────┘
-                          │                   │
-                          ▼                   ▼
-                   ┌─────────────┐    ┌─────────────┐
-                   │Origin Server│    │ PostgreSQL  │
-                   │  (Node.js)  │    │  Database   │
-                   └─────────────┘    └─────────────┘
-                          │                   │
-                          ▼                   ▼
-                   ┌─────────────┐    ┌─────────────┐
-                   │ Analytics   │    │  InfluxDB   │
-                   │ (Python)    │    │(Time Series)│
-                   └─────────────┘    └─────────────┘
-                          │                   │
-                          ▼                   ▼
-                   ┌─────────────┐    ┌─────────────┐
-                   │ Prometheus  │    │   Grafana   │
-                   │  Metrics    │    │ Dashboards  │
-                   └─────────────┘    └─────────────┘
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   User Request  │───▶│  Load Balancer  │───▶│   Edge Server   │
+│                 │    │     (Nginx)     │    │   (Go Cache)    │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+                                │                        │
+                                ▼                        ▼
+                       ┌─────────────────┐    ┌─────────────────┐
+                       │  API Gateway    │    │ Origin Server   │
+                       │   (Node.js)     │    │   (Node.js)     │
+                       └─────────────────┘    └─────────────────┘
+                                │                        │
+                                ▼                        ▼
+                       ┌─────────────────┐    ┌─────────────────┐
+                       │ Analytics API   │    │   PostgreSQL    │
+                       │   (Python)      │    │   Database      │
+                       └─────────────────┘    └─────────────────┘
+                                │                        │
+                                ▼                        ▼
+                       ┌─────────────────┐    ┌─────────────────┐
+                       │    InfluxDB     │    │   Redis Cache   │
+                       │ (Time Series)   │    │   (Cluster)     │
+                       └─────────────────┘    └─────────────────┘
 ```
 
-## 🚀 Quick Start
+### Service Flow
 
-### Prerequisites
+1. **User Request** → Nginx Load Balancer
+2. **Load Balancer** → Routes to appropriate Edge Server
+3. **Edge Server** → Checks Redis cache for content
+4. **Cache Miss** → Fetches from Origin Server
+5. **Cache Hit** → Serves cached content directly
+6. **Analytics** → Tracks all requests in real-time
+7. **Database** → Stores metadata and analytics data
 
-- Docker & Docker Compose
-- Git
-- curl (for testing)
-- OpenSSL (for SSL certificates)
+## Features
+
+### Core CDN Features
+- **Multi-Region Edge Servers** - US East, EU West, expandable
+- **Intelligent Caching** - Redis-based with configurable TTL
+- **Load Balancing** - Nginx with health checks and failover
+- **Content Upload** - Multi-file upload with validation
+- **Cache Invalidation** - Pattern-based cache clearing
+- **Geographic Routing** - Automatic region-based serving
+
+### Analytics & Monitoring
+- **Real-time Analytics** - Request tracking and performance metrics
+- **Time-series Data** - InfluxDB for historical analysis
+- **Geographic Distribution** - Request origin tracking
+- **Cache Performance** - Hit/miss rates and optimization insights
+- **Edge Server Monitoring** - Health status and performance metrics
+- **Daily Reports** - Automated analytics summaries
+
+### Performance Features
+- **HTTP/2 Support** - Modern protocol optimization
+- **Gzip Compression** - Automatic content compression
+- **Smart TTL** - Content-type based cache duration
+- **Rate Limiting** - DDoS protection and traffic control
+- **Health Checks** - Automatic service monitoring
+
+## Technology Stack
+
+### Backend Services
+- **Node.js 18** - Origin server and API gateway
+- **Go 1.21** - High-performance edge servers
+- **Python 3.11** - Analytics and data processing
+- **Nginx** - Load balancing and reverse proxy
+
+### Databases & Caching
+- **PostgreSQL 15** - Primary database for metadata
+- **Redis 7** - Distributed caching layer
+- **InfluxDB 2.7** - Time-series analytics data
+
+### Infrastructure
+- **Docker & Docker Compose** - Containerized deployment
+- **Prometheus Metrics** - Performance monitoring
+- **Health Check Endpoints** - Service monitoring
+
+## Prerequisites
+
+### System Requirements
+- **Operating System**: Linux, macOS, or Windows with WSL2
+- **RAM**: Minimum 8GB (16GB recommended)
+- **Storage**: At least 10GB free space
+- **CPU**: Multi-core processor recommended
+
+### Required Software
+```bash
+# Docker & Docker Compose
+docker --version  # 20.10+
+docker-compose --version  # 1.29+
+
+# Development tools (optional)
+curl --version
+jq --version
+bc --version
+```
+
+### Installation Commands
+
+**Ubuntu/Debian:**
+```bash
+# Update system
+sudo apt update && sudo apt upgrade -y
+
+# Install Docker
+curl -fsSL https://get.docker.com -o get-docker.sh
+sudo sh get-docker.sh
+sudo usermod -aG docker $USER
+
+# Install Docker Compose
+sudo apt install docker-compose-plugin
+
+# Install testing tools
+sudo apt install curl jq bc apache2-utils
+```
+
+**macOS:**
+```bash
+# Install Docker Desktop
+# Download from: https://docs.docker.com/desktop/mac/install/
+
+# Install testing tools with Homebrew
+brew install curl jq bc apache2-utils
+```
+
+**Windows (WSL2):**
+```bash
+# Install Docker Desktop with WSL2 backend
+# Download from: https://docs.docker.com/desktop/windows/install/
+
+# In WSL2 terminal:
+sudo apt update
+sudo apt install curl jq bc apache2-utils
+```
+
+## Quick Start
 
 ### 1. Clone and Setup
-
 ```bash
+# Clone the repository
 git clone <repository-url>
 cd cdn-system
 
 # Make scripts executable
 chmod +x scripts/*.sh
 
-# Run setup
+# Run setup script
 ./scripts/setup.sh
 ```
 
-### 2. Deploy
-
+### 2. Deploy the System
 ```bash
-# Build and start all services
+# Deploy all services
 ./scripts/deploy.sh
+
+# Monitor deployment status
+./scripts/monitor.sh
 ```
 
-### 3. Verify
-
+### 3. Verify Installation
 ```bash
-# Run comprehensive tests
-./scripts/test.sh
+# Check all services are running
+docker-compose ps
+
+# Test health endpoints
+curl http://localhost/health
+curl http://localhost:4000/health
+curl http://localhost:5000/health
 ```
 
-## 🌐 Service Access
+### 4. Upload Test Content
+```bash
+# Create a test file
+echo "Hello CDN World!" > test.txt
 
-| Service | URL | Credentials |
-|---------|-----|-------------|
-| **CDN** | http://localhost | - |
-| **Grafana** | http://localhost:3001 | admin/admin123 |
-| **Prometheus** | http://localhost:9090 | - |
-| **InfluxDB** | http://localhost:8086 | admin/admin123 |
-| **API Docs** | http://localhost/api/docs | - |
+# Upload via API
+curl -X POST \
+  -F "files=@test.txt" \
+  http://localhost:4000/api/upload
 
-## 🔧 Configuration
+# Access through CDN
+curl http://localhost/content/test-<timestamp>.txt
+```
 
-### Environment Variables
+## Detailed Setup
 
-Create `.env` file (auto-generated by setup script):
+### Environment Configuration
+
+The system uses environment variables for configuration. The setup script creates a `.env` file with defaults:
 
 ```bash
-# Database
+# Database Configuration
 POSTGRES_DB=cdn_db
 POSTGRES_USER=cdn_user
 POSTGRES_PASSWORD=cdn_password
 
-# Redis
+# Redis Configuration
 REDIS_PASSWORD=redis_password
 
-# InfluxDB
+# InfluxDB Configuration
 INFLUXDB_ADMIN_USER=admin
 INFLUXDB_ADMIN_PASSWORD=admin123
+INFLUXDB_ADMIN_TOKEN=admin-token
 
-# Application
+# Application Settings
 NODE_ENV=production
 CDN_DOMAIN=localhost
-API_SECRET_KEY=<generated-key>
+API_SECRET_KEY=<auto-generated>
 ```
-
-### Custom Configuration
-
-1. **Nginx Configuration**: Edit `nginx/nginx.conf`
-2. **Database Schema**: Modify `database/postgresql/init.sql`
-3. **Monitoring**: Update `monitoring/prometheus/prometheus.yml`
-4. **SSL Certificates**: Replace files in `nginx/ssl/`
-
-## 📊 API Endpoints
-
-### Content Management
-
-```bash
-# Upload files
-POST /upload
-Content-Type: multipart/form-data
-
-# Get content
-GET /content/{filename}
-
-# Static content (immutable)
-GET /static/{filename}
-
-# List files
-GET /files?page=1&limit=20
-```
-
-### Analytics
-
-```bash
-# Real-time metrics
-GET /api/analytics
-
-# Daily report
-GET /reports/daily/2024-01-15
-
-# Top content
-GET /content/top?limit=10
-
-# Server performance
-GET /servers/performance
-```
-
-### Cache Management
-
-```bash
-# Invalidate cache
-DELETE /cache/{pattern}
-
-# Health check
-GET /health
-```
-
-## 🐳 Docker Commands
-
-### Development
-
-```bash
-# Start services
-docker-compose up -d
-
-# View logs
-docker-compose logs -f [service-name]
-
-# Restart service
-docker-compose restart [service-name]
-
-# Scale edge servers
-docker-compose up -d --scale edge-server-1=3
-
-# Stop all
-docker-compose down
-```
-
-### Production Build
-
-```bash
-# Build for production
-docker-compose -f docker-compose.prod.yml build
-
-# Deploy production
-docker-compose -f docker-compose.prod.yml up -d
-```
-
-## ☸️ Kubernetes Deployment
-
-### Prerequisites
-
-- Kubernetes cluster (minikube, GKE, EKS, AKS)
-- kubectl configured
-- Docker images built and pushed to registry
-
-### Deploy to Kubernetes
-
-```bash
-# Apply all manifests
-kubectl apply -f kubernetes/
-
-# Check status
-kubectl get pods -n cdn-system
-
-# Scale edge servers
-kubectl scale deployment edge-server --replicas=5 -n cdn-system
-
-# Access via port-forward
-kubectl port-forward service/nginx 8080:80 -n cdn-system
-```
-
-### Kubernetes Monitoring
-
-```bash
-# View logs
-kubectl logs -f deployment/edge-server -n cdn-system
-
-# Get metrics
-kubectl top pods -n cdn-system
-
-# Access Grafana
-kubectl port-forward service/grafana 3001:3000 -n cdn-system
-```
-
-## 📈 Monitoring & Analytics
-
-### Key Metrics
-
-- **Cache Hit Rate**: Percentage of requests served from cache
-- **Response Time**: Average response time per region
-- **Bandwidth Usage**: Total bytes served
-- **Error Rate**: HTTP 4xx/5xx responses
-- **Geographic Distribution**: Requests by country/region
-
-### Grafana Dashboards
-
-1. **CDN Overview**: High-level metrics and status
-2. **Edge Server Performance**: Per-server metrics
-3. **Content Analytics**: Most popular content
-4. **Geographic Analytics**: Regional performance
-5. **System Health**: Infrastructure monitoring
-
-### Alerts
-
-Prometheus alerts configured for:
-- High error rates (>5%)
-- Low cache hit rates (<80%)
-- High response times (>2s)
-- Service downtime
-- Disk space usage (>85%)
-
-## 🔒 Security
-
-### Features
-
-- **SSL/TLS Encryption**: HTTPS by default
-- **Rate Limiting**: Per-IP request limits
-- **CORS Protection**: Configurable origins
-- **Input Validation**: File type and size limits
-- **Security Headers**: XSS, CSRF protection
-- **Authentication**: API key-based access
 
 ### SSL Configuration
 
-```bash
-# Generate production certificates
-openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-    -keyout nginx/ssl/cdn.key \
-    -out nginx/ssl/cdn.crt \
-    -subj "/C=US/ST=State/L=City/O=Org/CN=yourdomain.com"
+For production deployment with custom domains:
 
-# Or use Let's Encrypt with certbot
-certbot certonly --webroot -w /var/www/html -d yourdomain.com
+```bash
+# Replace development certificates
+cp your-domain.crt nginx/ssl/cdn.crt
+cp your-domain.key nginx/ssl/cdn.key
+
+# Update nginx configuration
+# Edit nginx/nginx.conf to use your domain
 ```
 
-## 🧪 Testing
+### Custom Domain Setup
 
-### Unit Tests
+1. **Update DNS Records**:
+   ```
+   A    cdn.yourdomain.com    → YOUR_SERVER_IP
+   CNAME api.yourdomain.com   → cdn.yourdomain.com
+   ```
 
+2. **Update Configuration**:
+   ```bash
+   # Edit docker-compose.yml
+   environment:
+     - CDN_DOMAIN=cdn.yourdomain.com
+   ```
+
+3. **Restart Services**:
+   ```bash
+   docker-compose restart nginx
+   ```
+
+## System Components
+
+### 1. Origin Server (Node.js)
+**Location**: `origin-server/src/app.js`
+**Port**: 3000
+
+The main content server handling:
+- File uploads and storage
+- Content metadata management
+- Database operations
+- Health monitoring
+
+**Key Features**:
+- Multi-file upload support
+- File validation and security
+- PostgreSQL integration
+- Analytics tracking
+
+### 2. Edge Servers (Go)
+**Location**: `edge-server/main.go`
+**Ports**: 8080 (US), 8081 (EU)
+
+High-performance caching servers:
+- Redis-based content caching
+- Origin server fallback
+- Geographic routing
+- Prometheus metrics
+
+**Key Features**:
+- Intelligent cache management
+- HTTP/2 support
+- Concurrent request handling
+- Automatic cache invalidation
+
+### 3. Analytics Service (Python)
+**Location**: `analytics-service/main.py`
+**Port**: 5000
+
+Real-time analytics and reporting:
+- Request tracking
+- Performance metrics
+- Time-series data storage
+- Geographic analytics
+
+**Key Features**:
+- InfluxDB integration
+- Real-time dashboards
+- Historical reporting
+- Cache performance analysis
+
+### 4. API Gateway (Node.js)
+**Location**: `api-gateway/src/app.js`
+**Port**: 4000
+
+Request routing and rate limiting:
+- Service proxy
+- Authentication
+- Rate limiting
+- CORS handling
+
+### 5. Load Balancer (Nginx)
+**Location**: `nginx/nginx.conf`
+**Port**: 80/443
+
+Traffic distribution and SSL termination:
+- Geographic routing
+- Health checks
+- SSL/TLS termination
+- Static content serving
+
+## API Documentation
+
+### Content Management
+
+#### Upload Files
 ```bash
-# Node.js services
-cd origin-server && npm test
+POST /api/upload
+Content-Type: multipart/form-data
 
-# Go services
-cd edge-server && go test ./...
-
-# Python services
-cd analytics-service && python -m pytest
+curl -X POST \
+  -F "files=@image1.jpg" \
+  -F "files=@style.css" \
+  http://localhost:4000/api/upload
 ```
 
-### Integration Tests
-
+#### List Files
 ```bash
-# Full system test
+GET /api/files?page=1&limit=20
+
+curl http://localhost:4000/api/files
+```
+
+#### Get Content
+```bash
+GET /content/{filename}
+
+curl http://localhost/content/image1-123456.jpg
+```
+
+### Analytics Endpoints
+
+#### Real-time Metrics
+```bash
+GET /api/analytics/metrics/realtime
+
+curl http://localhost:4000/api/analytics/metrics/realtime
+```
+
+#### Time Series Data
+```bash
+GET /api/analytics/metrics/timeseries?hours=24
+
+curl http://localhost:4000/api/analytics/metrics/timeseries?hours=48
+```
+
+#### Geographic Distribution
+```bash
+GET /api/analytics/metrics/geography
+
+curl http://localhost:4000/api/analytics/metrics/geography
+```
+
+#### Top Content
+```bash
+GET /api/analytics/content/top?limit=10
+
+curl http://localhost:4000/api/analytics/content/top?limit=20
+```
+
+#### Server Performance
+```bash
+GET /api/analytics/servers/performance
+
+curl http://localhost:4000/api/analytics/servers/performance
+```
+
+#### Daily Reports
+```bash
+GET /api/analytics/reports/daily/{date}
+
+curl http://localhost:4000/api/analytics/reports/daily/2025-07-26
+```
+
+### Health Checks
+
+All services provide health check endpoints:
+```bash
+# System health
+curl http://localhost/health
+
+# Individual services
+curl http://localhost:3000/health  # Origin Server
+curl http://localhost:4000/health  # API Gateway
+curl http://localhost:5000/health  # Analytics
+curl http://localhost:8080/health  # Edge Server US
+curl http://localhost:8081/health  # Edge Server EU
+```
+
+## Performance Testing
+
+The system includes comprehensive performance testing tools:
+
+### Run All Tests
+```bash
 ./scripts/test.sh
+```
 
-# Load testing with Apache Bench
-ab -n 1000 -c 10 http://localhost/static/test-file.jpg
+### Individual Test Categories
 
-# Custom load test with curl
+#### Cache Performance
+```bash
+# Tests cache hit/miss rates
+curl http://localhost/content/test-file.jpg  # First request (MISS)
+curl http://localhost/content/test-file.jpg  # Second request (HIT)
+```
+
+#### Load Testing
+```bash
+# Apache Bench (if installed)
+ab -n 1000 -c 50 http://localhost/content/test-file.jpg
+
+# Curl-based testing
 for i in {1..100}; do
-  curl -s http://localhost/content/test-file.jpg > /dev/null &
+  curl -w "@curl-format.txt" -o /dev/null -s http://localhost/content/test-file.jpg
 done
-wait
 ```
 
-## 🔧 Troubleshooting
+#### Geographic Performance
+```bash
+# Test different edge servers
+curl -w "%{time_total}\n" http://localhost:8080/content/test-file.jpg
+curl -w "%{time_total}\n" http://localhost:8081/content/test-file.jpg
+```
 
-### Common Issues
+### Test Results
 
-1. **Port Already in Use**
-   ```bash
-   # Find and kill process
-   lsof -i :80
-   kill -9 <PID>
-   ```
+After running tests, results are available in `./performance-results/`:
+- `performance_report.html` - Complete HTML report
+- `cache_performance.txt` - Cache metrics
+- `load_test.txt` - Load testing results
+- `system_health.txt` - Service status
 
-2. **Database Connection Failed**
-   ```bash
-   # Check PostgreSQL logs
-   docker-compose logs postgres
-   
-   # Reset database
-   docker-compose down -v
-   docker-compose up -d postgres
-   ```
+## Monitoring & Analytics
 
-3. **Redis Connection Issues**
-   ```bash
-   # Test Redis connectivity
-   docker-compose exec redis-cluster redis-cli ping
-   
-   # Check Redis logs
-   docker-compose logs redis-cluster
-   ```
+### Real-time Dashboard
 
-4. **Edge Server Cache Issues**
-   ```bash
-   # Clear Redis cache
-   docker-compose exec redis-cluster redis-cli FLUSHALL
-   
-   # Restart edge servers
-   docker-compose restart edge-server-1 edge-server-2
-   ```
+Access analytics through the API or build custom dashboards:
 
-### Log Locations
+```javascript
+// Example: Real-time metrics
+fetch('/api/analytics/metrics/realtime')
+  .then(response => response.json())
+  .then(data => {
+    console.log(`Cache Hit Rate: ${data.cache_hit_rate}%`);
+    console.log(`Total Requests: ${data.total_requests}`);
+    console.log(`Bytes Served: ${data.bytes_served}`);
+  });
+```
+
+### Key Metrics to Monitor
+
+1. **Cache Performance**
+   - Hit/Miss ratios
+   - Average response times
+   - Cache efficiency
+
+2. **Geographic Distribution**
+   - Request origins
+   - Regional performance
+   - Traffic patterns
+
+3. **Server Health**
+   - CPU and memory usage
+   - Response times
+   - Error rates
+
+4. **Content Analysis**
+   - Most requested files
+   - File type distribution
+   - Bandwidth usage
+
+### Setting Up Alerts
+
+Monitor critical metrics using the health endpoints:
 
 ```bash
-# Application logs
-docker-compose logs [service-name]
-
-# Nginx access logs
-docker-compose exec nginx tail -f /var/log/nginx/access.log
-
-# System logs
-journalctl -u docker
+#!/bin/bash
+# Simple monitoring script
+while true; do
+  if ! curl -f http://localhost/health > /dev/null 2>&1; then
+    echo "ALERT: CDN system is down!"
+    # Send notification
+  fi
+  sleep 60
+done
 ```
 
-## 📚 Development Guide
+## Troubleshooting
 
-### Adding New Features
+### Common Issues and Solutions
 
-1. **New API Endpoint**
-   - Add route to `origin-server/src/routes/`
-   - Update database schema if needed
-   - Add tests in `tests/`
-
-2. **New Metrics**
-   - Add metric to Prometheus config
-   - Create Grafana dashboard
-   - Update alert rules
-
-3. **New Edge Location**
-   - Scale edge servers: `docker-compose up -d --scale edge-server-1=N`
-   - Update load balancer configuration
-   - Monitor geographic distribution
-
-### Code Structure
-
-```
-cdn-system/
-├── nginx/              # Load balancer configuration
-├── origin-server/      # Node.js content management
-├── edge-server/        # Go edge servers
-├── api-gateway/        # API routing and auth
-├── analytics-service/  # Python analytics
-├── database/          # Database schemas and config
-├── monitoring/        # Prometheus and Grafana
-├── kubernetes/        # K8s deployment manifests
-├── scripts/          # Deployment and utility scripts
-├── tests/            # Test suites
-└── docs/             # Additional documentation
-```
-
-## 🚀 Production Deployment
-
-### Preparation
-
-1. **Domain Setup**
-   ```bash
-   # Update nginx.conf with your domain
-   server_name yourdomain.com;
-   ```
-
-2. **SSL Certificates**
-   ```bash
-   # Use Let's Encrypt or commercial certificates
-   certbot --nginx -d yourdomain.com
-   ```
-
-3. **Environment Variables**
-   ```bash
-   # Update production values
-   NODE_ENV=production
-   CDN_DOMAIN=yourdomain.com
-   ```
-
-### Cloud Deployment
-
-#### AWS
-- Use ECS/EKS for container orchestration
-- CloudFront as global CDN layer
-- RDS for PostgreSQL
-- ElastiCache for Redis
-- Route 53 for DNS
-
-#### Google Cloud
-- Use GKE for Kubernetes
-- Cloud CDN for global distribution
-- Cloud SQL for PostgreSQL
-- Memorystore for Redis
-- Cloud DNS for routing
-
-#### Azure
-- Use AKS for containers
-- Azure CDN for global reach
-- Azure Database for PostgreSQL
-- Azure Cache for Redis
-- Azure DNS for domain management
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create feature branch: `git checkout -b feature/amazing-feature`
-3. Commit changes: `git commit -m 'Add amazing feature'`
-4. Push to branch: `git push origin feature/amazing-feature`
-5. Open Pull Request
-
-### Development Workflow
-
+#### Services Won't Start
 ```bash
-# Setup development environment
-./scripts/setup.sh
+# Check Docker daemon
+sudo systemctl status docker
 
-# Start development services
-docker-compose up -d
+# Check available resources
+docker system df
+docker system prune -f  # Clean up if needed
 
-# Make changes and test
-./scripts/test.sh
-
-# View logs
-docker-compose logs -f [service-name]
+# Restart services individually
+docker-compose restart origin-server
+docker-compose restart edge-server-us
 ```
 
-## 📄 License
+#### Database Connection Issues
+```bash
+# Check PostgreSQL logs
+docker-compose logs postgres
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+# Test database connection
+docker-compose exec postgres psql -U cdn_user -d cdn_db -c "SELECT 1;"
 
-## 🆘 Support
+# Reset database if needed
+docker-compose down postgres
+docker volume rm cdn-system_postgres_data
+docker-compose up -d postgres
+```
 
-- **Documentation**: Check `/docs` folder for detailed guides
-- **Issues**: Report bugs via GitHub Issues
-- **Community**: Join our discussions
-- **Professional Support**: Contact for enterprise support
+#### Cache Problems
+```bash
+# Check Redis status
+docker-compose exec redis-cluster redis-cli ping
 
-## 🎯 Roadmap
+# Clear all cache
+docker-compose exec redis-cluster redis-cli FLUSHALL
 
-### Current Version (v1.0)
-- ✅ Basic CDN functionality
-- ✅ Multi-region edge servers
-- ✅ Real-time analytics
-- ✅ Docker deployment
-- ✅ Kubernetes support
+# Monitor cache usage
+docker-compose exec redis-cluster redis-cli INFO memory
+```
 
-### Future Versions
-- 🔄 HTTP/3 support
-- 🔄 Image optimization service
-- 🔄 Video streaming capabilities
-- 🔄 Advanced security features
-- 🔄 Machine learning-based caching
+#### High Memory Usage
+```bash
+# Check container resource usage
+docker stats
+
+# Reduce cache memory limits
+# Edit docker-compose.yml:
+command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+```
+
+#### SSL Certificate Issues
+```bash
+# Check certificate validity
+openssl x509 -in nginx/ssl/cdn.crt -text -noout
+
+# Regenerate certificates
+./scripts/setup.sh  # Recreates certificates
+```
+
+### Log Analysis
+```bash
+# View service logs
+docker-compose logs -f origin-server
+docker-compose logs -f edge-server-us
+docker-compose logs -f analytics-service
+
+# Search for errors
+docker-compose logs | grep -i error
+docker-compose logs | grep -i "cache miss"
+```
+
+### Performance Tuning
+
+#### Optimize Cache Settings
+```yaml
+# In docker-compose.yml for Redis
+command: redis-server --maxmemory 1g --maxmemory-policy allkeys-lru --tcp-keepalive 300
+```
+
+#### Adjust Nginx Configuration
+```nginx
+# In nginx/nginx.conf
+worker_processes auto;
+worker_connections 2048;
+keepalive_timeout 120;
+client_max_body_size 200M;
+```
+
+#### Scale Edge Servers
+```bash
+# Add more edge servers
+docker-compose up -d --scale edge-server-us=3
+```
+
+## Learning Resources
+
+### CDN Fundamentals
+- [CloudFlare CDN Learning Center](https://www.cloudflare.com/learning/cdn/)
+- [AWS CDN Documentation](https://docs.aws.amazon.com/cloudfront/)
+- [MDN Web Docs - HTTP Caching](https://developer.mozilla.org/en-US/docs/Web/HTTP/Caching)
+
+### Technology Deep Dives
+
+#### Docker & Containerization
+- [Docker Official Tutorial](https://docs.docker.com/get-started/)
+- [Docker Compose Documentation](https://docs.docker.com/compose/)
+- [Container Best Practices](https://docs.docker.com/develop/dev-best-practices/)
+
+#### Node.js Development
+- [Node.js Official Guide](https://nodejs.org/en/docs/guides/)
+- [Express.js Documentation](https://expressjs.com/)
+- [Node.js Performance Best Practices](https://nodejs.org/en/docs/guides/simple-profiling/)
+
+#### Go Programming
+- [Go by Example](https://gobyexample.com/)
+- [Effective Go](https://golang.org/doc/effective_go)
+- [Go Web Programming](https://github.com/astaxie/build-web-application-with-golang)
+
+#### Python & FastAPI
+- [FastAPI Documentation](https://fastapi.tiangolo.com/)
+- [Python Async Programming](https://docs.python.org/3/library/asyncio.html)
+
+#### Database Technologies
+- [PostgreSQL Documentation](https://www.postgresql.org/docs/)
+- [Redis Documentation](https://redis.io/documentation)
+- [InfluxDB Documentation](https://docs.influxdata.com/)
+
+#### Web Performance
+- [Web Performance Optimization](https://developers.google.com/web/fundamentals/performance)
+- [HTTP/2 Explained](https://http2-explained.haxx.se/)
+- [Nginx Performance Tuning](https://nginx.org/en/docs/http/ngx_http_core_module.html)
+
+### Advanced Topics
+
+#### Microservices Architecture
+- [Microservices Patterns](https://microservices.io/)
+- [Service Mesh Introduction](https://istio.io/latest/docs/concepts/what-is-istio/)
+- [API Gateway Patterns](https://microservices.io/patterns/apigateway.html)
+
+#### Observability & Monitoring
+- [Prometheus Documentation](https://prometheus.io/docs/)
+- [Grafana Documentation](https://grafana.com/docs/)
+- [OpenTelemetry](https://opentelemetry.io/docs/)
+
+#### DevOps & Deployment
+- [Kubernetes Documentation](https://kubernetes.io/docs/)
+- [CI/CD Best Practices](https://docs.gitlab.com/ee/ci/)
+- [Infrastructure as Code](https://www.terraform.io/intro/index.html)
+
+## Next Steps
+
+After getting the system running, consider these enhancements:
+
+### Performance Optimizations
+1. Implement HTTP/2 Push for critical resources
+2. Add Image Optimization with automatic format conversion
+3. Implement Brotli Compression for better compression ratios
+4. Add CDN Purge API for selective cache invalidation
+
+### Scaling Improvements
+1. Kubernetes Deployment for production orchestration
+2. Multi-Region Deployment across cloud providers
+3. Auto-scaling based on traffic patterns
+4. Database Sharding for large-scale operations
+
+### Advanced Features
+1. Machine Learning for predictive caching
+2. Real-time Streaming for live content
+3. Edge Computing capabilities
+4. Advanced Security with WAF integration
+
+### Monitoring Enhancements
+1. Custom Grafana Dashboards
+2. Alerting Rules for operational issues
+3. Log Aggregation with ELK stack
+4. Distributed Tracing for request flows
 
 ---
 
-**Built with ❤️ for high-performance content delivery**
+This CDN system provides a solid foundation for learning distributed systems, caching strategies, and modern web performance optimization. Start with the basic setup and gradually explore the advanced features as you become more comfortable with the architecture.
+
+Happy learning! 🎉

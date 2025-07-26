@@ -1,4 +1,3 @@
-// origin-server/src/app.js
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
@@ -13,19 +12,44 @@ const { InfluxDB, Point } = require('@influxdata/influxdb-client');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Database connections
+// Database connections with better error handling
 const pool = new Pool({
-    connectionString: process.env.DB_URL || 'postgresql://cdn_user:cdn_password@localhost:5432/cdn_db'
+    connectionString: process.env.DB_URL || 'postgresql://cdn_user:cdn_password@postgres:5432/cdn_db'
 });
 
-const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379');
+const redis = new Redis(process.env.REDIS_URL || 'redis://redis-cluster:6379');
 
 // InfluxDB for analytics
 const influxDB = new InfluxDB({
-    url: process.env.INFLUX_URL || 'http://localhost:8086',
-    token: process.env.INFLUX_TOKEN || 'your-token'
+    url: process.env.INFLUX_URL || 'http://influxdb:8086',
+    token: process.env.INFLUX_TOKEN || 'admin-token'
 });
-const writeApi = influxDB.getWriteApi('cdn-org', 'cdn-analytics');
+const writeApi = influxDB.getWriteApi(process.env.INFLUX_ORG || 'cdn-org', process.env.INFLUX_BUCKET || 'cdn-metrics');
+
+// Test database connection
+async function testDatabaseConnection() {
+    try {
+        const client = await pool.connect();
+        await client.query('SELECT 1');
+        client.release();
+        console.log('✅ Database connection successful');
+        return true;
+    } catch (error) {
+        console.error('❌ Database connection failed:', error.message);
+        return false;
+    }
+}
+
+// Test connections on startup
+(async () => {
+    await testDatabaseConnection();
+    try {
+        await redis.ping();
+        console.log('✅ Redis connection successful');
+    } catch (error) {
+        console.error('❌ Redis connection failed:', error.message);
+    }
+})();
 
 // Middleware
 app.use(helmet());
@@ -34,63 +58,115 @@ app.use(morgan('combined'));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
-// File upload configuration
+// Ensure uploads directory exists
+const uploadsDir = path.join(__dirname, '..', 'uploads');
+async function ensureUploadsDir() {
+    try {
+        await fs.mkdir(uploadsDir, { recursive: true });
+        console.log('✅ Uploads directory ready:', uploadsDir);
+    } catch (error) {
+        console.error('❌ Failed to create uploads directory:', error);
+        process.exit(1);
+    }
+}
+ensureUploadsDir();
+
+// FIXED: Improved multer configuration with better error handling
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
-        cb(null, './uploads/');
+    destination: async (req, file, cb) => {
+        try {
+            // Ensure directory exists
+            await fs.access(uploadsDir);
+            cb(null, uploadsDir);
+        } catch (error) {
+            console.error('❌ Upload directory not accessible:', error);
+            // Try to create it if it doesn't exist
+            try {
+                await fs.mkdir(uploadsDir, { recursive: true });
+                cb(null, uploadsDir);
+            } catch (createError) {
+                console.error('❌ Failed to create upload directory:', createError);
+                cb(createError);
+            }
+        }
     },
     filename: (req, file, cb) => {
+        // Generate unique filename
         const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-        cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+        const ext = path.extname(file.originalname);
+        const name = path.basename(file.originalname, ext);
+        cb(null, `${name}-${uniqueSuffix}${ext}`);
     }
 });
 
 const upload = multer({ 
     storage: storage,
     limits: {
-        fileSize: 100 * 1024 * 1024 // 100MB limit
+        fileSize: 100 * 1024 * 1024, // 100MB limit
+        files: 10 // Max 10 files per request
     },
     fileFilter: (req, file, cb) => {
         // Allow common web file types
-        const allowedTypes = /jpeg|jpg|png|gif|webp|svg|css|js|html|pdf|mp4|webm/;
-        const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
-        const mimetype = allowedTypes.test(file.mimetype);
+        const allowedExtensions = /\.(jpeg|jpg|png|gif|webp|svg|css|js|html|pdf|mp4|webm|txt|json|xml)$/i;
+        const extname = allowedExtensions.test(path.extname(file.originalname));
         
-        if (mimetype && extname) {
+        if (extname) {
             return cb(null, true);
         } else {
-            cb(new Error('File type not allowed'));
+            const error = new Error('File type not allowed');
+            error.code = 'INVALID_FILE_TYPE';
+            cb(error);
         }
     }
 });
+
+//BUG- counting refreshes as cache misses
 
 // Analytics middleware
 const analyticsMiddleware = (req, res, next) => {
     const startTime = Date.now();
     
-    res.on('finish', () => {
+    const originalEnd = res.end;
+    
+    res.end = function(chunk, encoding) {
         const responseTime = Date.now() - startTime;
+        
+        let cacheStatus = 'MISS';
+        const edgeServer = req.get('X-Edge-Server');
+        const xCache = req.get('X-Cache') || res.get('X-Cache');
+        
+        if (xCache) {
+            cacheStatus = xCache.toUpperCase();
+        } else if (edgeServer) {
+            cacheStatus = 'MISS';
+        }
         
         // Write analytics data to InfluxDB
         const point = new Point('http_requests')
             .tag('method', req.method)
             .tag('status_code', res.statusCode.toString())
             .tag('user_agent', req.get('User-Agent') || 'unknown')
-            .tag('edge_server', req.get('X-Edge-Server') || 'direct')
+            .tag('edge_server', edgeServer || 'direct')
             .tag('edge_region', req.get('X-Edge-Region') || 'unknown')
+            .tag('cache_status', cacheStatus)
             .intField('response_time', responseTime)
-            .intField('bytes_sent', res.get('Content-Length') || 0)
+            .intField('bytes_sent', res.get('Content-Length') || chunk?.length || 0)
             .stringField('path', req.path)
             .stringField('ip', req.ip);
         
         writeApi.writePoint(point);
         
-        // Also cache hit rate data in Redis for quick access
+        // Update Redis cache
         const cacheKey = `analytics:${new Date().toISOString().split('T')[0]}`;
+        
         redis.hincrby(cacheKey, 'total_requests', 1);
         redis.hincrby(cacheKey, `status_${res.statusCode}`, 1);
-        redis.expire(cacheKey, 86400 * 7); // Keep for 7 days
-    });
+        redis.hincrby(cacheKey, `cache_${cacheStatus.toLowerCase()}`, 1);
+        redis.hincrby(cacheKey, 'total_bytes', res.get('Content-Length') || chunk?.length || 0);
+        redis.expire(cacheKey, 86400 * 7);
+        
+        originalEnd.call(this, chunk, encoding);
+    };
     
     next();
 };
@@ -106,13 +182,17 @@ app.get('/health', async (req, res) => {
         // Check Redis connection
         await redis.ping();
         
+        // Check uploads directory
+        await fs.access(uploadsDir);
+        
         res.json({
             status: 'healthy',
             timestamp: new Date().toISOString(),
             services: {
                 database: 'healthy',
                 redis: 'healthy',
-                influxdb: 'healthy'
+                influxdb: 'healthy',
+                uploads_dir: 'accessible'
             }
         });
     } catch (error) {
@@ -124,50 +204,133 @@ app.get('/health', async (req, res) => {
     }
 });
 
-// Content upload endpoint
-app.post('/upload', upload.array('files', 10), async (req, res) => {
-    try {
-        if (!req.files || req.files.length === 0) {
-            return res.status(400).json({ error: 'No files uploaded' });
+// FIXED: Improved upload endpoint with comprehensive error handling
+app.post('/upload', (req, res) => {
+    console.log('📤 Upload request received');
+    
+    upload.array('files', 10)(req, res, async (err) => {
+        if (err) {
+            console.error('❌ Multer error:', err);
+            
+            if (err instanceof multer.MulterError) {
+                switch (err.code) {
+                    case 'LIMIT_FILE_SIZE':
+                        return res.status(400).json({ 
+                            error: 'File too large', 
+                            message: 'Maximum file size is 100MB' 
+                        });
+                    case 'LIMIT_FILE_COUNT':
+                        return res.status(400).json({ 
+                            error: 'Too many files', 
+                            message: 'Maximum 10 files per request' 
+                        });
+                    case 'LIMIT_UNEXPECTED_FILE':
+                        return res.status(400).json({ 
+                            error: 'Unexpected field', 
+                            message: 'Use "files" field name for uploads' 
+                        });
+                    default:
+                        return res.status(400).json({ 
+                            error: 'Upload error', 
+                            message: err.message 
+                        });
+                }
+            } else if (err.code === 'INVALID_FILE_TYPE') {
+                return res.status(400).json({ 
+                    error: 'Invalid file type', 
+                    message: 'Allowed types: images, CSS, JS, HTML, PDF, videos' 
+                });
+            } else {
+                return res.status(500).json({ 
+                    error: 'Server error', 
+                    message: 'Failed to process upload' 
+                });
+            }
         }
-
-        const uploadedFiles = [];
         
-        for (const file of req.files) {
-            // Store file metadata in database
-            const query = `
-                INSERT INTO files (filename, original_name, mimetype, size, path, uploaded_at)
-                VALUES ($1, $2, $3, $4, $5, NOW())
-                RETURNING id, filename
-            `;
+        try {
+            if (!req.files || req.files.length === 0) {
+                return res.status(400).json({ 
+                    error: 'No files uploaded',
+                    message: 'Please select files to upload'
+                });
+            }
+
+            console.log(`📁 Processing ${req.files.length} files`);
+            const uploadedFiles = [];
             
-            const result = await pool.query(query, [
-                file.filename,
-                file.originalname,
-                file.mimetype,
-                file.size,
-                file.path
-            ]);
+            for (const file of req.files) {
+                console.log(`📄 Processing: ${file.originalname} (${file.size} bytes)`);
+                
+                try {
+                    // Verify file was written successfully
+                    await fs.access(file.path);
+                    const stats = await fs.stat(file.path);
+                    
+                    if (stats.size !== file.size) {
+                        throw new Error('File size mismatch - upload may be corrupted');
+                    }
+                    
+                    // Store file metadata in database
+                    const query = `
+                        INSERT INTO files (filename, original_name, mimetype, size, path, uploaded_at)
+                        VALUES ($1, $2, $3, $4, $5, NOW())
+                        RETURNING id, filename
+                    `;
+                    
+                    const result = await pool.query(query, [
+                        file.filename,
+                        file.originalname,
+                        file.mimetype,
+                        file.size,
+                        file.path
+                    ]);
+                    
+                    uploadedFiles.push({
+                        id: result.rows[0].id,
+                        filename: result.rows[0].filename,
+                        original_name: file.originalname,
+                        size: file.size,
+                        mimetype: file.mimetype,
+                        url: `/content/${result.rows[0].filename}`
+                    });
+                    
+                    console.log(`✅ File saved: ${file.originalname}`);
+                    
+                } catch (fileError) {
+                    console.error(`❌ Error processing ${file.originalname}:`, fileError);
+                    // Clean up failed file
+                    try {
+                        await fs.unlink(file.path);
+                    } catch (unlinkError) {
+                        console.error('Failed to cleanup file:', unlinkError);
+                    }
+                }
+            }
             
-            uploadedFiles.push({
-                id: result.rows[0].id,
-                filename: result.rows[0].filename,
-                original_name: file.originalname,
-                size: file.size,
-                mimetype: file.mimetype,
-                url: `/content/${result.rows[0].filename}`
+            if (uploadedFiles.length === 0) {
+                return res.status(500).json({ 
+                    error: 'Upload failed', 
+                    message: 'No files were saved successfully' 
+                });
+            }
+            
+            console.log(`✅ Successfully uploaded ${uploadedFiles.length} files`);
+            res.json({
+                message: 'Files uploaded successfully',
+                count: uploadedFiles.length,
+                files: uploadedFiles
+            });
+            
+        } catch (error) {
+            console.error('❌ Upload processing error:', error);
+            res.status(500).json({ 
+                error: 'Server error',
+                message: 'Failed to process uploaded files',
+                details: process.env.NODE_ENV === 'development' ? error.message : undefined
             });
         }
-        
-        res.json({
-            message: 'Files uploaded successfully',
-            files: uploadedFiles
-        });
-        
-    } catch (error) {
-        console.error('Upload error:', error);
-        res.status(500).json({ error: 'Upload failed' });
-    }
+    });
 });
 
 // Content serving endpoint
@@ -175,20 +338,24 @@ app.get('/content/:filename', async (req, res) => {
     try {
         const { filename } = req.params;
         
+        console.log(`📥 Serving content: ${filename}`);
+        
         // Get file metadata from database
         const query = 'SELECT * FROM files WHERE filename = $1';
         const result = await pool.query(query, [filename]);
         
         if (result.rows.length === 0) {
+            console.log(`❌ File not found in database: ${filename}`);
             return res.status(404).json({ error: 'File not found' });
         }
         
         const fileRecord = result.rows[0];
-        const filePath = path.join(__dirname, '..', 'uploads', filename);
+        const filePath = path.join(uploadsDir, filename);
         
         try {
             await fs.access(filePath);
         } catch {
+            console.log(`❌ File not found on disk: ${filename}`);
             return res.status(404).json({ error: 'File not found on disk' });
         }
         
@@ -214,51 +381,12 @@ app.get('/content/:filename', async (req, res) => {
         }
         
         // Send file
+        console.log(`✅ Serving file: ${filename}`);
         res.sendFile(filePath);
         
     } catch (error) {
-        console.error('Content serving error:', error);
+        console.error('❌ Content serving error:', error);
         res.status(500).json({ error: 'Failed to serve content' });
-    }
-});
-
-// Static content endpoint
-app.get('/static/:filename', async (req, res) => {
-    try {
-        const { filename } = req.params;
-        const filePath = path.join(__dirname, '..', 'uploads', filename);
-        
-        // Check if file exists
-        try {
-            await fs.access(filePath);
-        } catch {
-            return res.status(404).json({ error: 'File not found' });
-        }
-        
-        // Get file stats
-        const stats = await fs.stat(filePath);
-        const mimeType = getMimeType(filename);
-        
-        // Set headers for static content (longer cache)
-        res.set({
-            'Content-Type': mimeType,
-            'Content-Length': stats.size,
-            'Cache-Control': 'public, max-age=31536000, immutable',
-            'ETag': `"${stats.mtime.getTime()}-${stats.size}"`,
-            'Last-Modified': stats.mtime.toUTCString()
-        });
-        
-        // Handle conditional requests
-        const ifNoneMatch = req.get('If-None-Match');
-        if (ifNoneMatch === `"${stats.mtime.getTime()}-${stats.size}"`) {
-            return res.status(304).end();
-        }
-        
-        res.sendFile(filePath);
-        
-    } catch (error) {
-        console.error('Static content error:', error);
-        res.status(500).json({ error: 'Failed to serve static content' });
     }
 });
 
@@ -297,82 +425,24 @@ app.get('/files', async (req, res) => {
         });
         
     } catch (error) {
-        console.error('File listing error:', error);
+        console.error('❌ File listing error:', error);
         res.status(500).json({ error: 'Failed to list files' });
-    }
-});
-
-// Analytics endpoint
-app.get('/analytics', async (req, res) => {
-    try {
-        const days = parseInt(req.query.days) || 7;
-        const dates = [];
-        
-        for (let i = 0; i < days; i++) {
-            const date = new Date();
-            date.setDate(date.getDate() - i);
-            dates.push(date.toISOString().split('T')[0]);
-        }
-        
-        const analytics = {};
-        
-        for (const date of dates) {
-            const cacheKey = `analytics:${date}`;
-            const data = await redis.hgetall(cacheKey);
-            analytics[date] = data;
-        }
-        
-        res.json({
-            period: `${days} days`,
-            data: analytics
-        });
-        
-    } catch (error) {
-        console.error('Analytics error:', error);
-        res.status(500).json({ error: 'Failed to get analytics' });
-    }
-});
-
-// Cache invalidation endpoint
-app.delete('/cache/:pattern', async (req, res) => {
-    try {
-        const { pattern } = req.params;
-        const keys = await redis.keys(`content:*${pattern}*`);
-        
-        if (keys.length > 0) {
-            await redis.del(...keys);
-        }
-        
-        res.json({
-            message: 'Cache invalidated',
-            keys_deleted: keys.length
-        });
-        
-    } catch (error) {
-        console.error('Cache invalidation error:', error);
-        res.status(500).json({ error: 'Failed to invalidate cache' });
     }
 });
 
 // Error handling middleware
 app.use((error, req, res, next) => {
-    console.error('Error:', error);
-    
-    if (error instanceof multer.MulterError) {
-        if (error.code === 'LIMIT_FILE_SIZE') {
-            return res.status(400).json({ error: 'File too large' });
-        }
-    }
+    console.error('❌ Unhandled error:', error);
     
     res.status(500).json({ 
         error: 'Internal server error',
-        message: process.env.NODE_ENV === 'development' ? error.message : undefined
+        message: process.env.NODE_ENV === 'development' ? error.message : 'Something went wrong'
     });
 });
 
 // 404 handler
 app.use((req, res) => {
-    res.status(404).json({ error: 'Not found' });
+    res.status(404).json({ error: 'Endpoint not found' });
 });
 
 // Utility functions
@@ -387,36 +457,12 @@ function getCacheControl(mimetype) {
     return 'public, max-age=300'; // 5 minutes default
 }
 
-function getMimeType(filename) {
-    const ext = path.extname(filename).toLowerCase();
-    const mimeTypes = {
-        '.jpg': 'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.png': 'image/png',
-        '.gif': 'image/gif',
-        '.webp': 'image/webp',
-        '.svg': 'image/svg+xml',
-        '.css': 'text/css',
-        '.js': 'application/javascript',
-        '.html': 'text/html',
-        '.pdf': 'application/pdf',
-        '.mp4': 'video/mp4',
-        '.webm': 'video/webm'
-    };
-    return mimeTypes[ext] || 'application/octet-stream';
-}
-
 // Graceful shutdown
 process.on('SIGTERM', async () => {
-    console.log('Received SIGTERM, shutting down gracefully');
+    console.log('🛑 Received SIGTERM, shutting down gracefully');
     
-    // Close InfluxDB write API
     writeApi.close();
-    
-    // Close Redis connection
     redis.disconnect();
-    
-    // Close database pool
     await pool.end();
     
     process.exit(0);
@@ -424,8 +470,9 @@ process.on('SIGTERM', async () => {
 
 // Start server
 app.listen(PORT, () => {
-    console.log(`Origin server running on port ${PORT}`);
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`🚀 Origin server running on port ${PORT}`);
+    console.log(`📁 Upload directory: ${uploadsDir}`);
+    console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 module.exports = app;

@@ -12,14 +12,16 @@ RUN apk add --no-cache \
 # Copy package files
 COPY package*.json ./
 
-# Install dependencies (changed from npm ci to npm install)
+# Install dependencies
 RUN npm install --only=production
 
 # Copy source code
 COPY src/ ./src/
 
-# Create uploads directory
-RUN mkdir -p uploads && chown -R node:node uploads
+# Create uploads directory with proper permissions
+RUN mkdir -p uploads && \
+    chmod 755 uploads && \
+    chown node:node uploads
 
 # Switch to non-root user
 USER node

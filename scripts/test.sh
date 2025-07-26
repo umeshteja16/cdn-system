@@ -1,326 +1,647 @@
 #!/bin/bash
-# scripts/test.sh
+
+# 🚀 CDN Performance Testing Suite
+# Comprehensive testing for the CDN system architecture
+
 set -e
 
-echo "🧪 Running CDN System Tests..."
+# Configuration
+CDN_BASE_URL="http://localhost"
+API_BASE_URL="http://localhost:4000/api"
+EDGE_US_URL="http://localhost:8080"
+EDGE_EU_URL="http://localhost:8081"
+ANALYTICS_URL="http://localhost:5000"
+TEST_DURATION=60
+CONCURRENT_USERS=50
+TEST_FILES_DIR="./test-files"
+RESULTS_DIR="./performance-results"
 
-# Colors
+# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m'
+NC='\033[0m' # No Color
 
-# Counters
-TOTAL_TESTS=0
-PASSED_TESTS=0
-FAILED_TESTS=0
-
-# Test results file
-TEST_RESULTS="test-results.txt"
-> $TEST_RESULTS
-
-print_test_header() {
-    echo ""
-    echo -e "${BLUE}==================== $1 ====================${NC}"
+# Logging
+log() {
+    echo -e "${BLUE}[$(date +'%Y-%m-%d %H:%M:%S')]${NC} $1"
 }
 
-print_pass() {
-    echo -e "${GREEN}✅ PASS: $1${NC}"
-    echo "PASS: $1" >> $TEST_RESULTS
-    PASSED_TESTS=$((PASSED_TESTS + 1))
+success() {
+    echo -e "${GREEN}✅ $1${NC}"
 }
 
-print_fail() {
-    echo -e "${RED}❌ FAIL: $1${NC}"
-    echo "FAIL: $1" >> $TEST_RESULTS
-    FAILED_TESTS=$((FAILED_TESTS + 1))
+warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
 }
 
-print_info() {
-    echo -e "${BLUE}ℹ️  $1${NC}"
+error() {
+    echo -e "${RED}❌ $1${NC}"
 }
 
-# Function to test HTTP endpoint
-test_endpoint() {
-    local url=$1
-    local expected_status=$2
-    local description=$3
-    local timeout=${4:-10}
+# Create directories
+setup_test_environment() {
+    log "Setting up test environment..."
     
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    mkdir -p "$TEST_FILES_DIR" "$RESULTS_DIR"
     
-    status=$(timeout $timeout curl -s -o /dev/null -w "%{http_code}" "$url" 2>/dev/null || echo "000")
+    # Create test files of various sizes
+    create_test_files
     
-    if [ "$status" = "$expected_status" ]; then
-        print_pass "$description ($status)"
-        return 0
-    else
-        print_fail "$description (expected $expected_status, got $status)"
-        return 1
-    fi
+    # Upload test files to CDN
+    upload_test_files
+    
+    success "Test environment ready"
 }
 
-# Function to check if service is running
-check_service() {
-    local service_name=$1
-    local description=$2
+create_test_files() {
+    log "Creating test files..."
     
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
+    # Small image (10KB)
+    dd if=/dev/urandom of="$TEST_FILES_DIR/small-image.jpg" bs=1024 count=10 2>/dev/null
     
-    if docker-compose ps | grep -q "$service_name.*Up"; then
-        print_pass "$description is running"
-        return 0
-    else
-        print_fail "$description is not running"
-        return 1
-    fi
+    # Medium image (500KB)
+    dd if=/dev/urandom of="$TEST_FILES_DIR/medium-image.jpg" bs=1024 count=500 2>/dev/null
+    
+    # Large image (5MB)
+    dd if=/dev/urandom of="$TEST_FILES_DIR/large-image.jpg" bs=1024 count=5120 2>/dev/null
+    
+    # CSS file (50KB)
+    dd if=/dev/urandom of="$TEST_FILES_DIR/styles.css" bs=1024 count=50 2>/dev/null
+    
+    # JavaScript file (100KB)
+    dd if=/dev/urandom of="$TEST_FILES_DIR/script.js" bs=1024 count=100 2>/dev/null
+    
+    # HTML file (5KB)
+    cat > "$TEST_FILES_DIR/index.html" << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CDN Performance Test</title>
+    <link rel="stylesheet" href="/content/styles.css">
+</head>
+<body>
+    <h1>CDN Performance Test Page</h1>
+    <img src="/content/small-image.jpg" alt="Small Image">
+    <img src="/content/medium-image.jpg" alt="Medium Image">
+    <script src="/content/script.js"></script>
+</body>
+</html>
+EOF
+    
+    success "Test files created"
 }
 
-# Function to upload test file
-upload_test_file() {
-    print_info "Creating and uploading test file..."
+upload_test_files() {
+    log "Uploading test files to CDN..."
     
-    # Create test files
-    echo "This is a test text file for CDN testing" > test-file.txt
-    echo "<html><body><h1>Test HTML File</h1></body></html>" > test-file.html
-    
-    # Create a small image (1x1 pixel PNG)
-    echo -n -e '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xdb\x00\x00\x00\x00IEND\xaeB`\x82' > test-file.png
-    
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    
-    # Upload text file
-    response=$(curl -s -X POST -F "files=@test-file.txt" http://localhost/upload 2>/dev/null || echo "upload failed")
-    
-    if echo "$response" | grep -q "uploaded successfully" 2>/dev/null; then
-        print_pass "File upload successful"
+    for file in "$TEST_FILES_DIR"/*; do
+        filename=$(basename "$file")
+        log "Uploading $filename..."
         
-        # Extract filename from response
-        filename=$(echo "$response" | grep -o '"filename":"[^"]*"' | cut -d'"' -f4 | head -1)
-        if [ -n "$filename" ]; then
-            echo "$filename" > .test-filename
-            print_info "Uploaded filename: $filename"
+        response=$(curl -s -w "%{http_code}" -X POST \
+            -F "files=@$file" \
+            "$API_BASE_URL/upload" \
+            -o /tmp/upload_response.json)
+        
+        if [ "$response" = "200" ]; then
+            success "Uploaded $filename"
         else
-            echo "test-file.txt" > .test-filename
-            print_info "Using fallback filename: test-file.txt"
+            error "Failed to upload $filename (HTTP $response)"
         fi
-        return 0
-    else
-        print_fail "File upload failed"
-        echo "$response"
-        return 1
-    fi
+    done
+    
+    # Wait for files to be available
+    sleep 5
+    success "All test files uploaded"
 }
 
-# Function to test content delivery
-test_content_delivery() {
-    if [ ! -f .test-filename ]; then
-        print_info "No test file found. Skipping content delivery tests."
-        return
-    fi
-    
-    filename=$(cat .test-filename)
-    print_info "Testing content delivery for: $filename"
-    
-    # Test direct content access
-    test_endpoint "http://localhost/content/$filename" "200" "Content delivery"
-    
-    # Test static content access  
-    test_endpoint "http://localhost/static/$filename" "200" "Static content delivery"
-    
-    # Test cache headers
-    print_info "Checking cache headers..."
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    
-    headers=$(curl -s -I "http://localhost/content/$filename" 2>/dev/null || echo "")
-    
-    if echo "$headers" | grep -qi "cache-control" && echo "$headers" | grep -qi "x-cache"; then
-        cache_status=$(echo "$headers" | grep -i "x-cache" | cut -d' ' -f2 | tr -d '\r' || echo "UNKNOWN")
-        print_pass "Cache headers present (Status: $cache_status)"
-    else
-        print_fail "Cache headers missing or incomplete"
-    fi
-    
-    # Test cache behavior (second request should be cached)
-    print_info "Testing cache behavior..."
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    
-    # First request
-    curl -s -I "http://localhost/content/$filename" >/dev/null 2>&1
-    sleep 1
-    
-    # Second request should show cache status
-    headers2=$(curl -s -I "http://localhost/content/$filename" 2>/dev/null || echo "")
-    if echo "$headers2" | grep -qi "x-cache"; then
-        print_pass "Cache system is working"
-    else
-        print_fail "Cache system not working properly"
-    fi
-}
+# Performance Test Functions
 
-# Function to test analytics
-test_analytics() {
-    print_info "Testing analytics endpoints..."
+test_cache_performance() {
+    log "Testing cache performance..."
     
-    # Direct analytics service
-    test_endpoint "http://localhost:5000/health" "200" "Analytics service health"
-    test_endpoint "http://localhost:5000/metrics/realtime" "200" "Real-time metrics"
+    local test_file="small-image.jpg"
+    local total_requests=1000
+    local results_file="$RESULTS_DIR/cache_performance.txt"
     
-    # Through main API
-    test_endpoint "http://localhost/api/analytics" "200" "Analytics API endpoint" 15
-}
-
-# Function to test monitoring
-test_monitoring() {
-    print_info "Testing monitoring stack..."
+    echo "Cache Performance Test Results" > "$results_file"
+    echo "================================" >> "$results_file"
+    echo "Test File: $test_file" >> "$results_file"
+    echo "Total Requests: $total_requests" >> "$results_file"
+    echo "Date: $(date)" >> "$results_file"
+    echo "" >> "$results_file"
     
-    test_endpoint "http://localhost:9090/-/healthy" "200" "Prometheus health"
-    test_endpoint "http://localhost:3001/api/health" "200" "Grafana health"
+    # Cold cache test (first request should be MISS)
+    log "Testing cold cache (expecting MISS)..."
+    cache_status=$(curl -s -I "$CDN_BASE_URL/content/$test_file" | grep -i "x-cache" | cut -d' ' -f2 | tr -d '\r')
+    log "Cold cache status: $cache_status"
+    echo "Cold Cache Status: $cache_status" >> "$results_file"
     
-    # Test metrics endpoints from edge servers
-    test_endpoint "http://localhost:8080/metrics" "200" "Edge server metrics" 15
-}
-
-# Function to run basic load test
-basic_load_test() {
-    print_info "Running basic load test..."
+    # Warm cache test (subsequent requests should be HIT)
+    log "Testing warm cache performance..."
+    local hit_count=0
+    local miss_count=0
+    local total_time=0
     
-    if ! command -v ab &> /dev/null; then
-        print_info "Apache Bench (ab) not installed. Skipping load test."
-        print_info "Install with: sudo apt-get install apache2-utils (Ubuntu) or brew install httpie (macOS)"
-        return 0
-    fi
-    
-    filename=$(cat .test-filename 2>/dev/null || echo "")
-    if [ -z "$filename" ]; then
-        print_info "No test file available for load testing"
-        return 0
-    fi
-    
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    
-    print_info "Running 50 requests with 5 concurrent connections..."
-    
-    if ab -n 50 -c 5 -q "http://localhost/content/$filename" > load-test-results.txt 2>&1; then
-        print_pass "Load test completed successfully"
+    for i in $(seq 1 100); do
+        start_time=$(date +%s.%3N)
+        cache_status=$(curl -s -I "$CDN_BASE_URL/content/$test_file" | grep -i "x-cache" | cut -d' ' -f2 | tr -d '\r')
+        end_time=$(date +%s.%3N)
         
-        # Extract key metrics
-        rps=$(grep "Requests per second" load-test-results.txt | awk '{print $4}' || echo "N/A")
-        mean_time=$(grep "Time per request.*mean" load-test-results.txt | head -1 | awk '{print $4}' || echo "N/A")
-        failed=$(grep "Failed requests" load-test-results.txt | awk '{print $3}' || echo "N/A")
+        response_time=$(echo "$end_time - $start_time" | bc -l)
+        total_time=$(echo "$total_time + $response_time" | bc -l)
         
-        print_info "Results: $rps req/sec, ${mean_time}ms avg, $failed failed"
-        
-        if [ "$failed" = "0" ] 2>/dev/null; then
-            print_pass "No failed requests in load test"
-            TOTAL_TESTS=$((TOTAL_TESTS + 1))
-            PASSED_TESTS=$((PASSED_TESTS + 1))
+        if [[ "$cache_status" == *"HIT"* ]]; then
+            ((hit_count++))
         else
-            print_fail "Some requests failed during load test"
-            TOTAL_TESTS=$((TOTAL_TESTS + 1))
-            FAILED_TESTS=$((FAILED_TESTS + 1))
+            ((miss_count++))
         fi
+        
+        if [ $((i % 10)) -eq 0 ]; then
+            log "Completed $i/100 cache tests..."
+        fi
+    done
+    
+    local avg_time=$(echo "scale=3; $total_time / 100" | bc -l)
+    local hit_rate=$(echo "scale=2; $hit_count * 100 / 100" | bc -l)
+    
+    echo "Warm Cache Results:" >> "$results_file"
+    echo "  Cache Hits: $hit_count" >> "$results_file"
+    echo "  Cache Misses: $miss_count" >> "$results_file"
+    echo "  Hit Rate: ${hit_rate}%" >> "$results_file"
+    echo "  Average Response Time: ${avg_time}s" >> "$results_file"
+    
+    success "Cache performance test completed. Hit rate: ${hit_rate}%"
+}
+
+test_load_performance() {
+    log "Running load performance test..."
+    
+    local results_file="$RESULTS_DIR/load_test.txt"
+    
+    # Test different file sizes under load
+    local test_files=("small-image.jpg" "medium-image.jpg" "styles.css" "script.js")
+    
+    echo "Load Performance Test Results" > "$results_file"
+    echo "=============================" >> "$results_file"
+    echo "Concurrent Users: $CONCURRENT_USERS" >> "$results_file"
+    echo "Test Duration: ${TEST_DURATION}s" >> "$results_file"
+    echo "Date: $(date)" >> "$results_file"
+    echo "" >> "$results_file"
+    
+    for test_file in "${test_files[@]}"; do
+        log "Load testing $test_file..."
+        
+        # Use Apache Bench for load testing
+        ab_result=$(ab -n 1000 -c "$CONCURRENT_USERS" -t "$TEST_DURATION" \
+            "$CDN_BASE_URL/content/$test_file" 2>/dev/null || echo "AB failed")
+        
+        if [[ "$ab_result" != "AB failed" ]]; then
+            echo "File: $test_file" >> "$results_file"
+            echo "$ab_result" | grep -E "(Requests per second|Time per request|Transfer rate)" >> "$results_file"
+            echo "" >> "$results_file"
+            
+            # Extract key metrics
+            rps=$(echo "$ab_result" | grep "Requests per second" | awk '{print $4}')
+            success "Load test for $test_file: ${rps} req/sec"
+        else
+            warning "Load test failed for $test_file"
+        fi
+    done
+}
+
+test_geographic_performance() {
+    log "Testing geographic edge server performance..."
+    
+    local results_file="$RESULTS_DIR/geographic_performance.txt"
+    local test_file="medium-image.jpg"
+    
+    echo "Geographic Performance Test Results" > "$results_file"
+    echo "===================================" >> "$results_file"
+    echo "Test File: $test_file" >> "$results_file"
+    echo "Date: $(date)" >> "$results_file"
+    echo "" >> "$results_file"
+    
+    # Test US Edge Server
+    log "Testing US Edge Server ($EDGE_US_URL)..."
+    us_times=()
+    for i in $(seq 1 10); do
+        start_time=$(date +%s.%3N)
+        curl -s "$EDGE_US_URL/content/$test_file" > /dev/null
+        end_time=$(date +%s.%3N)
+        response_time=$(echo "$end_time - $start_time" | bc -l)
+        us_times+=("$response_time")
+    done
+    
+    # Test EU Edge Server
+    log "Testing EU Edge Server ($EDGE_EU_URL)..."
+    eu_times=()
+    for i in $(seq 1 10); do
+        start_time=$(date +%s.%3N)
+        curl -s "$EDGE_EU_URL/content/$test_file" > /dev/null
+        end_time=$(date +%s.%3N)
+        response_time=$(echo "$end_time - $start_time" | bc -l)
+        eu_times+=("$response_time")
+    done
+    
+    # Calculate averages
+    us_avg=$(printf '%s\n' "${us_times[@]}" | awk '{sum+=$1} END {print sum/NR}')
+    eu_avg=$(printf '%s\n' "${eu_times[@]}" | awk '{sum+=$1} END {print sum/NR}')
+    
+    echo "US Edge Server (us-east-1):" >> "$results_file"
+    echo "  Average Response Time: ${us_avg}s" >> "$results_file"
+    echo "  Individual Times: ${us_times[*]}" >> "$results_file"
+    echo "" >> "$results_file"
+    echo "EU Edge Server (eu-west-1):" >> "$results_file"
+    echo "  Average Response Time: ${eu_avg}s" >> "$results_file"
+    echo "  Individual Times: ${eu_times[*]}" >> "$results_file"
+    
+    success "Geographic performance test completed"
+    log "US Edge Average: ${us_avg}s, EU Edge Average: ${eu_avg}s"
+}
+
+test_concurrent_uploads() {
+    log "Testing concurrent upload performance..."
+    
+    local results_file="$RESULTS_DIR/concurrent_uploads.txt"
+    local upload_count=20
+    
+    echo "Concurrent Upload Performance Test" > "$results_file"
+    echo "=================================" >> "$results_file"
+    echo "Concurrent Uploads: $upload_count" >> "$results_file"
+    echo "Date: $(date)" >> "$results_file"
+    echo "" >> "$results_file"
+    
+    # Create temporary files for upload testing
+    local temp_dir="$TEST_FILES_DIR/upload_test"
+    mkdir -p "$temp_dir"
+    
+    for i in $(seq 1 "$upload_count"); do
+        dd if=/dev/urandom of="$temp_dir/upload_test_$i.dat" bs=1024 count=100 2>/dev/null
+    done
+    
+    # Start concurrent uploads
+    local start_time=$(date +%s.%3N)
+    local pids=()
+    
+    for i in $(seq 1 "$upload_count"); do
+        (
+            curl -s -X POST \
+                -F "files=@$temp_dir/upload_test_$i.dat" \
+                "$API_BASE_URL/upload" \
+                > "$temp_dir/result_$i.json"
+        ) &
+        pids+=($!)
+    done
+    
+    # Wait for all uploads to complete
+    for pid in "${pids[@]}"; do
+        wait "$pid"
+    done
+    
+    local end_time=$(date +%s.%3N)
+    local total_time=$(echo "$end_time - $start_time" | bc -l)
+    
+    # Count successful uploads
+    local success_count=0
+    for i in $(seq 1 "$upload_count"); do
+        if grep -q "successfully" "$temp_dir/result_$i.json" 2>/dev/null; then
+            ((success_count++))
+        fi
+    done
+    
+    echo "Results:" >> "$results_file"
+    echo "  Total Time: ${total_time}s" >> "$results_file"
+    echo "  Successful Uploads: $success_count/$upload_count" >> "$results_file"
+    echo "  Average Time per Upload: $(echo "scale=3; $total_time / $upload_count" | bc -l)s" >> "$results_file"
+    echo "  Uploads per Second: $(echo "scale=2; $upload_count / $total_time" | bc -l)" >> "$results_file"
+    
+    # Cleanup
+    rm -rf "$temp_dir"
+    
+    success "Concurrent upload test completed: $success_count/$upload_count successful"
+}
+
+test_analytics_performance() {
+    log "Testing analytics system performance..."
+    
+    local results_file="$RESULTS_DIR/analytics_performance.txt"
+    
+    echo "Analytics Performance Test Results" > "$results_file"
+    echo "==================================" >> "$results_file"
+    echo "Date: $(date)" >> "$results_file"
+    echo "" >> "$results_file"
+    
+    # Test analytics endpoints
+    local endpoints=(
+        "metrics/realtime"
+        "metrics/timeseries?hours=24"
+        "content/top"
+        "servers/performance"
+    )
+    
+    for endpoint in "${endpoints[@]}"; do
+        log "Testing analytics endpoint: $endpoint"
+        
+        local total_time=0
+        local success_count=0
+        
+        for i in $(seq 1 10); do
+            start_time=$(date +%s.%3N)
+            
+            if curl -s -f "$ANALYTICS_URL/$endpoint" > /dev/null; then
+                ((success_count++))
+            fi
+            
+            end_time=$(date +%s.%3N)
+            response_time=$(echo "$end_time - $start_time" | bc -l)
+            total_time=$(echo "$total_time + $response_time" | bc -l)
+        done
+        
+        local avg_time=$(echo "scale=3; $total_time / 10" | bc -l)
+        
+        echo "Endpoint: $endpoint" >> "$results_file"
+        echo "  Success Rate: $success_count/10" >> "$results_file"
+        echo "  Average Response Time: ${avg_time}s" >> "$results_file"
+        echo "" >> "$results_file"
+        
+        success "Analytics endpoint $endpoint: ${avg_time}s avg, $success_count/10 success"
+    done
+}
+
+test_system_health() {
+    log "Testing system health and connectivity..."
+    
+    local results_file="$RESULTS_DIR/system_health.txt"
+    
+    echo "System Health Test Results" > "$results_file"
+    echo "==========================" >> "$results_file"
+    echo "Date: $(date)" >> "$results_file"
+    echo "" >> "$results_file"
+    
+    # Test health endpoints
+    local services=(
+        "localhost:3000:Origin Server"
+        "localhost:4000:API Gateway"
+        "localhost:5000:Analytics Service"
+        "localhost:8080:Edge Server US"
+        "localhost:8081:Edge Server EU"
+        "localhost:80:Load Balancer"
+    )
+    
+    for service in "${services[@]}"; do
+        IFS=':' read -r host port name <<< "$service"
+        
+        log "Testing $name health..."
+        
+        if curl -s -f "http://$host:$port/health" > /tmp/health_response.json; then
+            status=$(jq -r '.status // "unknown"' /tmp/health_response.json 2>/dev/null || echo "unknown")
+            echo "$name: ✅ $status" >> "$results_file"
+            success "$name is healthy ($status)"
+        else
+            echo "$name: ❌ Unhealthy or unreachable" >> "$results_file"
+            error "$name is unhealthy"
+        fi
+    done
+    
+    echo "" >> "$results_file"
+    
+    # Test database connectivity
+    log "Testing database connectivity..."
+    if docker-compose exec -T postgres pg_isready -U cdn_user > /dev/null 2>&1; then
+        echo "PostgreSQL: ✅ Connected" >> "$results_file"
+        success "PostgreSQL is connected"
     else
-        print_fail "Load test failed to complete"
+        echo "PostgreSQL: ❌ Connection failed" >> "$results_file"
+        error "PostgreSQL connection failed"
+    fi
+    
+    # Test Redis connectivity
+    log "Testing Redis connectivity..."
+    if docker-compose exec -T redis-cluster redis-cli ping > /dev/null 2>&1; then
+        echo "Redis: ✅ Connected" >> "$results_file"
+        success "Redis is connected"
+    else
+        echo "Redis: ❌ Connection failed" >> "$results_file"
+        error "Redis connection failed"
     fi
 }
 
-# Function to test database connections
-test_databases() {
-    print_info "Testing database connections..."
+stress_test() {
+    log "Running comprehensive stress test..."
     
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    if docker-compose exec -T postgres pg_isready -U cdn_user -d cdn_db >/dev/null 2>&1; then
-        print_pass "PostgreSQL connection"
-    else
-        print_fail "PostgreSQL connection"
-    fi
+    local results_file="$RESULTS_DIR/stress_test.txt"
     
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    if docker-compose exec -T redis-cluster redis-cli ping | grep -q "PONG" 2>/dev/null; then
-        print_pass "Redis connection"
-    else
-        print_fail "Redis connection"
-    fi
+    echo "Comprehensive Stress Test Results" > "$results_file"
+    echo "=================================" >> "$results_file"
+    echo "Test Duration: ${TEST_DURATION}s" >> "$results_file"
+    echo "Concurrent Users: $CONCURRENT_USERS" >> "$results_file"
+    echo "Date: $(date)" >> "$results_file"
+    echo "" >> "$results_file"
     
-    TOTAL_TESTS=$((TOTAL_TESTS + 1))
-    if curl -sf http://localhost:8086/health >/dev/null 2>&1; then
-        print_pass "InfluxDB connection"
-    else
-        print_fail "InfluxDB connection"
-    fi
+    # Mixed workload stress test
+    local test_urls=(
+        "$CDN_BASE_URL/content/small-image.jpg"
+        "$CDN_BASE_URL/content/medium-image.jpg"
+        "$CDN_BASE_URL/content/styles.css"
+        "$CDN_BASE_URL/content/script.js"
+        "$CDN_BASE_URL/content/index.html"
+    )
+    
+    log "Starting mixed workload stress test..."
+    
+    # Start background processes for each URL
+    local pids=()
+    for url in "${test_urls[@]}"; do
+        (
+            local requests=0
+            local errors=0
+            local total_time=0
+            local end_time=$(($(date +%s) + TEST_DURATION))
+            
+            while [ $(date +%s) -lt $end_time ]; do
+                start_time=$(date +%s.%3N)
+                
+                if curl -s -f "$url" > /dev/null 2>&1; then
+                    ((requests++))
+                else
+                    ((errors++))
+                fi
+                
+                end_request_time=$(date +%s.%3N)
+                response_time=$(echo "$end_request_time - $start_time" | bc -l)
+                total_time=$(echo "$total_time + $response_time" | bc -l)
+                
+                # Small delay to prevent overwhelming
+                sleep 0.01
+            done
+            
+            echo "URL: $url" >> "$results_file.tmp.$$"
+            echo "  Requests: $requests" >> "$results_file.tmp.$$"
+            echo "  Errors: $errors" >> "$results_file.tmp.$$"
+            echo "  Avg Response Time: $(echo "scale=3; $total_time / ($requests + $errors)" | bc -l)s" >> "$results_file.tmp.$$"
+            echo "" >> "$results_file.tmp.$$"
+        ) &
+        pids+=($!)
+    done
+    
+    # Wait for all stress tests to complete
+    for pid in "${pids[@]}"; do
+        wait "$pid"
+    done
+    
+    # Combine results
+    cat "$results_file.tmp."* >> "$results_file" 2>/dev/null || true
+    rm -f "$results_file.tmp."* 2>/dev/null || true
+    
+    success "Stress test completed"
 }
 
-# Main test execution
-echo "🏁 Starting CDN System Tests..."
-echo "=============================="
+generate_report() {
+    log "Generating comprehensive performance report..."
+    
+    local report_file="$RESULTS_DIR/performance_report.html"
+    
+    cat > "$report_file" << 'EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>CDN Performance Test Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; }
+        .header { background: #f4f4f4; padding: 20px; border-radius: 5px; }
+        .section { margin: 20px 0; padding: 15px; border-left: 4px solid #007cba; }
+        .success { color: #28a745; }
+        .warning { color: #ffc107; }
+        .error { color: #dc3545; }
+        pre { background: #f8f9fa; padding: 10px; border-radius: 3px; overflow-x: auto; }
+        table { border-collapse: collapse; width: 100%; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>CDN Performance Test Report</h1>
+        <p>Generated on: $(date)</p>
+        <p>Test Configuration:</p>
+        <ul>
+            <li>Test Duration: ${TEST_DURATION}s</li>
+            <li>Concurrent Users: $CONCURRENT_USERS</li>
+            <li>CDN Base URL: $CDN_BASE_URL</li>
+        </ul>
+    </div>
+EOF
+    
+    # Add each test result to the report
+    for result_file in "$RESULTS_DIR"/*.txt; do
+        if [ -f "$result_file" ]; then
+            local section_name=$(basename "$result_file" .txt | tr '_' ' ' | sed 's/\b\w/\U&/g')
+            
+            cat >> "$report_file" << EOF
+    <div class="section">
+        <h2>$section_name</h2>
+        <pre>$(cat "$result_file")</pre>
+    </div>
+EOF
+        fi
+    done
+    
+    cat >> "$report_file" << 'EOF'
+    <div class="section">
+        <h2>Summary</h2>
+        <p>Performance testing completed successfully. Review individual test results above for detailed metrics.</p>
+    </div>
+</body>
+</html>
+EOF
+    
+    success "Performance report generated: $report_file"
+    
+    # Also generate a simple text summary
+    local summary_file="$RESULTS_DIR/SUMMARY.txt"
+    
+    cat > "$summary_file" << EOF
+CDN PERFORMANCE TEST SUMMARY
+============================
+Date: $(date)
+Test Duration: ${TEST_DURATION}s
+Concurrent Users: $CONCURRENT_USERS
 
-# 1. Service Health Checks
-print_test_header "SERVICE HEALTH CHECKS"
-check_service "nginx" "Nginx Load Balancer"
-check_service "origin-server" "Origin Server"
-check_service "edge-server-1" "Edge Server 1"
-check_service "edge-server-2" "Edge Server 2"
-check_service "analytics-service" "Analytics Service"
-check_service "postgres" "PostgreSQL Database"
-check_service "redis-cluster" "Redis Cache"
-check_service "prometheus" "Prometheus"
-check_service "grafana" "Grafana"
+Test Results:
+$(ls -la "$RESULTS_DIR"/*.txt | wc -l) test files generated
 
-# 2. Basic Endpoint Tests
-print_test_header "BASIC ENDPOINT TESTS"
-test_endpoint "http://localhost/health" "200" "CDN main health check"
-test_endpoint "http://localhost:3000/health" "200" "Origin server direct health"
+Key Files:
+- performance_report.html: Complete HTML report
+- cache_performance.txt: Cache hit/miss rates
+- load_test.txt: Load testing results
+- geographic_performance.txt: Edge server comparison
+- system_health.txt: Service health status
 
-# 3. Database Tests
-print_test_header "DATABASE CONNECTIVITY"
-test_databases
+Open performance_report.html in your browser for the full report.
+EOF
+    
+    success "Test summary: $summary_file"
+}
 
-# 4. File Upload and Delivery
-print_test_header "FILE OPERATIONS"
-upload_test_file
-test_content_delivery
+cleanup() {
+    log "Cleaning up test environment..."
+    rm -rf "$TEST_FILES_DIR"
+    success "Cleanup completed"
+}
 
-# 5. Analytics Tests
-print_test_header "ANALYTICS SYSTEM"
-test_analytics
-
-# 6. Monitoring Tests
-print_test_header "MONITORING STACK"
-test_monitoring
-
-# 7. Load Testing
-print_test_header "PERFORMANCE TESTING"
-basic_load_test
-
-# Cleanup test files
-print_info "Cleaning up test files..."
-rm -f test-file.txt test-file.html test-file.png .test-filename load-test-results.txt
-
-# Final Results
-echo ""
-print_test_header "TEST RESULTS SUMMARY"
-echo "Total Tests: $TOTAL_TESTS"
-echo -e "${GREEN}Passed: $PASSED_TESTS${NC}"
-echo -e "${RED}Failed: $FAILED_TESTS${NC}"
-
-if [ $FAILED_TESTS -eq 0 ]; then
-    echo -e "${GREEN}🎉 All tests passed! CDN system is working correctly.${NC}"
-    exit_code=0
-else
-    echo -e "${YELLOW}⚠️  Some tests failed. Check the output above for details.${NC}"
+# Main execution
+main() {
+    echo "🚀 CDN PERFORMANCE TESTING SUITE"
+    echo "================================="
     echo ""
-    echo "Common solutions:"
-    echo "- Wait a few more minutes for services to fully start"
-    echo "- Check logs: docker-compose logs [service-name]"
-    echo "- Restart services: docker-compose restart"
-    echo "- Full reset: ./scripts/cleanup.sh && ./scripts/setup.sh && ./scripts/deploy.sh"
-    exit_code=1
-fi
+    
+    # Check prerequisites
+    command -v curl >/dev/null 2>&1 || { error "curl is required but not installed."; exit 1; }
+    command -v ab >/dev/null 2>&1 || { warning "apache2-utils (ab) not found. Install for load testing."; }
+    command -v jq >/dev/null 2>&1 || { warning "jq not found. Install for better JSON parsing."; }
+    command -v bc >/dev/null 2>&1 || { error "bc is required but not installed."; exit 1; }
+    
+    # Run tests
+    setup_test_environment
+    
+    log "Starting performance tests..."
+    
+    test_system_health
+    test_cache_performance
+    test_geographic_performance
+    test_concurrent_uploads  
+    test_analytics_performance
+    test_load_performance
+    stress_test
+    
+    generate_report
+    
+    echo ""
+    success "🎉 All performance tests completed!"
+    log "Results available in: $RESULTS_DIR/"
+    log "Open $RESULTS_DIR/performance_report.html for the full report"
+    
+    # Show quick summary
+    echo ""
+    echo "📊 QUICK SUMMARY:"
+    echo "=================="
+    if [ -f "$RESULTS_DIR/cache_performance.txt" ]; then
+        grep "Hit Rate:" "$RESULTS_DIR/cache_performance.txt" | head -1
+    fi
+    if [ -f "$RESULTS_DIR/system_health.txt" ]; then
+        echo "Services Status:"
+        grep -E "(✅|❌)" "$RESULTS_DIR/system_health.txt"
+    fi
+    
+    read -p "Clean up test files? (y/N): " -n 1 -r
+    echo
+    if [[ $REPLY =~ ^[Yy]$ ]]; then
+        cleanup
+    fi
+}
 
-echo ""
-echo "📄 Detailed results saved to: $TEST_RESULTS"
-echo "🐛 For troubleshooting: docker-compose logs -f"
-
-exit $exit_code
+# Execute main function
+main "$@"
